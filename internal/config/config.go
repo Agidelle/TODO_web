@@ -18,7 +18,6 @@ func LoadCfg() (*Config, error) {
 	//Конфиг для разработки из .env
 	viper.SetConfigFile(".env")
 
-	viper.SetConfigFile(".env") // Указываем имя файла
 	if err := viper.ReadInConfig(); err != nil {
 		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
 			fmt.Println(".env файл не найден, используем переменные окружения или значения по умолчанию")

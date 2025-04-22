@@ -91,7 +91,7 @@ func (s *TaskService) Update(task *domain.Task) (code int, err error) {
 		return http.StatusBadRequest, errors.New("не указан заголовок задачи")
 	}
 	if task.Date == "" {
-		task.Date = time.Now().Format(dateForm) //если дата пустая, присваиваем текущую
+		task.Date = time.Now().Format(dateForm)
 	}
 	date, err := time.Parse(dateForm, task.Date)
 	if err != nil {
