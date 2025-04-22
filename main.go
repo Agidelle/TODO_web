@@ -16,6 +16,6 @@ func main() {
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 
 	<-stop
-	//graceful shutdown
+
 	app.Stop(server)
 }
