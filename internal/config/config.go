@@ -7,11 +7,11 @@ import (
 )
 
 type Config struct {
-	Port     int    `mapstructure:"todo_port"`
-	DBdriver string `mapstructure:"todo_driver"`
-	DBPath   string `mapstructure:"todo_dbfile"`
-	Password string `mapstructure:"todo_password"`
-	JWTKey   string `mapstructure:"todo_jwtsecret"`
+	Port     int    `mapstructure:"TODO_PORT"`
+	DBdriver string `mapstructure:"TODO_DRIVER"`
+	DBPath   string `mapstructure:"TODO_DBFILE"`
+	Password string `mapstructure:"TODO_PASSWORD"`
+	JWTKey   string `mapstructure:"TODO_JWTSECRET"`
 }
 
 func LoadCfg() (*Config, error) {
