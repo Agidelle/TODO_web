@@ -2,6 +2,13 @@ name: Go
 
 on: [push]
 
+env:
+  TODO_PORT: 7540
+  TODO_DRIVER: sqlite
+  TODO_DBFILE: ./scheduler.db
+  TODO_PASSWORD: 1111
+  TODO_JWTSECRET: secret
+  
 jobs:
   build:
     runs-on: ubuntu-latest
