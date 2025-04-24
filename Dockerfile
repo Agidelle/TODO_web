@@ -4,13 +4,13 @@ WORKDIR /app
 
 RUN apk add git
 
-ENV APP_NAME="TODO_web"
+ENV TODO_NAME="TODO_web"
 
 RUN mkdir /out
 COPY . /app/
 
 RUN go build  \
-    -o /out/${APP_NAME}  \
+    -o /out/${TODO_NAME}  \
     github.com/agidelle/todo_web
 
 
@@ -28,6 +28,6 @@ COPY --from=build /out/TODO_web /app/
 COPY --from=build /app/web /app/web
 
 
-EXPOSE 7540
-RUN apk add curl
+EXPOSE ${TODO_PORT}
+
 CMD ["/app/TODO_web"]

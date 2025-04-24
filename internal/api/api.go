@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -12,6 +13,13 @@ import (
 	"github.com/agidelle/todo_web/internal/service"
 )
 
+var errorMap = map[error]int{
+	domain.ErrID:             http.StatusBadRequest,
+	domain.ErrBadTitle:       http.StatusBadRequest,
+	domain.ErrDate:           http.StatusBadRequest,
+	domain.ErrInternalServer: http.StatusInternalServerError,
+}
+
 type TaskHandler struct {
 	service *service.TaskService
 }
@@ -20,22 +28,29 @@ func NewHandler(service *service.TaskService) *TaskHandler {
 	return &TaskHandler{service: service}
 }
 
-func sendJSONError(w http.ResponseWriter, message string, statusCode int) {
-	w.WriteHeader(statusCode)
+func sendJSONError(w http.ResponseWriter, customErr *domain.CustomError) {
+	w.WriteHeader(customErr.Code)
+	var errorMessage string
+	if customErr.ErrStorage != nil {
+		errorMessage = fmt.Sprintf("%v: %v", customErr.Err, customErr.ErrStorage)
+	} else {
+		errorMessage = fmt.Sprintf("%v", customErr.Err)
+	}
+
 	err := json.NewEncoder(w).Encode(struct {
 		Error string `json:"error"`
 	}{
-		Error: message,
+		Error: errorMessage,
 	})
 	if err != nil {
 		log.Println(err)
 	}
 }
 
-func sendJSONTasks(w http.ResponseWriter, tasks []domain.Task) {
+func sendJSONTasks(w http.ResponseWriter, tasks []*domain.Task) {
 	w.Header().Set("Content-Type", "application/json")
 	err := json.NewEncoder(w).Encode(struct {
-		Tasks []domain.Task `json:"tasks"`
+		Tasks []*domain.Task `json:"tasks"`
 	}{
 		Tasks: tasks,
 	})
@@ -48,64 +63,90 @@ func (h *TaskHandler) AddTask(w http.ResponseWriter, r *http.Request) {
 	w.Header().Add("Content-Type", "application/json")
 	var task domain.Task
 	if err := json.NewDecoder(r.Body).Decode(&task); err != nil {
-		sendJSONError(w, "ошибка десериализации JSON", http.StatusBadRequest)
+		sendJSONError(w, domain.NewCustomError(http.StatusBadRequest, errors.New("ошибка десериализации JSON"), nil))
 		return
 	}
 
 	//Добавление задачи
-	id, code, err := h.service.Create(&task)
-	if err != nil {
-		sendJSONError(w, err.Error(), code)
+	id, cErr := h.service.Create(&task)
+	if cErr != nil {
+		if code, ok := errorMap[cErr.Err]; ok {
+			cErr.Code = code
+		} else {
+			cErr.Code = http.StatusInternalServerError
+		}
+		sendJSONError(w, cErr)
 		return
 	}
+
 	task.ID = strconv.Itoa(int(id))
 
 	w.WriteHeader(http.StatusCreated)
-	err = json.NewEncoder(w).Encode(map[string]int64{"id": id})
+	err := json.NewEncoder(w).Encode(map[string]int64{"id": id})
 	if err != nil {
 		log.Printf("Error writing response: %v", err)
 	}
 }
 
 func (h *TaskHandler) GetTasks(w http.ResponseWriter, r *http.Request) {
+	var filter domain.Filter
 	queryValues := r.URL.Query()
 	_, searchParamExists := queryValues["search"]
 
-	search := r.URL.Query().Get("search")
+	filter.SearchTerm = r.URL.Query().Get("search")
 
 	if !searchParamExists {
-		res, code, err := h.service.GetTasks()
-		if err != nil {
-			sendJSONError(w, err.Error(), code)
+		res, cErr := h.service.GetTasks(&filter)
+		if cErr != nil {
+			if code, ok := errorMap[cErr.Err]; ok {
+				cErr.Code = code
+			} else {
+				cErr.Code = http.StatusInternalServerError
+			}
+			sendJSONError(w, cErr)
 			return
 		}
-		sendJSONTasks(w, *res)
+		sendJSONTasks(w, res)
 	} else {
-		res, code, err := h.service.Search(search)
-		if err != nil {
-			sendJSONError(w, err.Error(), code)
+		res, cErr := h.service.Search(&filter)
+		if cErr != nil {
+			if code, ok := errorMap[cErr.Err]; ok {
+				cErr.Code = code
+			} else {
+				cErr.Code = http.StatusInternalServerError
+			}
+			sendJSONError(w, cErr)
 			return
 		}
-		sendJSONTasks(w, *res)
+		sendJSONTasks(w, res)
 	}
 }
 
+// Для использования FindAll нужна маленькая корректировка
 func (h *TaskHandler) GetTask(w http.ResponseWriter, r *http.Request) {
+	var filter domain.Filter
 	searchID := r.URL.Query().Get("id")
 	if searchID == "" {
-		sendJSONError(w, "не указан идентификатор", http.StatusBadRequest)
+		sendJSONError(w, domain.NewCustomError(http.StatusBadRequest, domain.ErrID, nil))
 		return
 	}
 	id, err := strconv.Atoi(searchID)
 	if err != nil {
-		sendJSONError(w, "неправильный формат идентификатора", http.StatusBadRequest)
+		sendJSONError(w, domain.NewCustomError(http.StatusBadRequest, domain.ErrID, err))
 		return
 	}
-	task, code, err := h.service.GetTask(id)
-	if err != nil {
-		sendJSONError(w, err.Error(), code)
+	filter.ID = &id
+	task, cErr := h.service.GetTask(&filter)
+	if cErr != nil {
+		if code, ok := errorMap[cErr.Err]; ok {
+			cErr.Code = code
+		} else {
+			cErr.Code = http.StatusInternalServerError
+		}
+		sendJSONError(w, cErr)
 		return
 	}
+	//Корректировка: task[0].ID = searchID, проверка на len есть в FindAll
 	task.ID = searchID
 	err = json.NewEncoder(w).Encode(&task)
 	if err != nil {
@@ -117,35 +158,49 @@ func (h *TaskHandler) UpdateTask(w http.ResponseWriter, r *http.Request) {
 	w.Header().Add("Content-Type", "application/json")
 	var task domain.Task
 	if err := json.NewDecoder(r.Body).Decode(&task); err != nil {
-		sendJSONError(w, "ошибка десериализации JSON", http.StatusBadRequest)
+		sendJSONError(w, domain.NewCustomError(http.StatusBadRequest, errors.New("ошибка десериализации JSON"), err))
 		return
 	}
-	code, err := h.service.Update(&task)
-	if err != nil {
-		sendJSONError(w, err.Error(), code)
+	cErr := h.service.Update(&task)
+	if cErr != nil {
+		if code, ok := errorMap[cErr.Err]; ok {
+			cErr.Code = code
+		} else {
+			cErr.Code = http.StatusInternalServerError
+		}
+		sendJSONError(w, cErr)
 		return
 	}
-	err = json.NewEncoder(w).Encode(domain.Task{})
+	err := json.NewEncoder(w).Encode(domain.Task{})
 	if err != nil {
 		log.Printf("Error writing response: %v", err)
 	}
 }
 
 func (h *TaskHandler) Done(w http.ResponseWriter, r *http.Request) {
+	var filter domain.Filter
 	searchID := r.URL.Query().Get("id")
 	if searchID == "" {
-		sendJSONError(w, "не указан идентификатор", http.StatusBadRequest)
+		sendJSONError(w, domain.NewCustomError(http.StatusBadRequest, domain.ErrID, nil))
 		return
 	}
 	id, err := strconv.Atoi(searchID)
 	if err != nil {
-		sendJSONError(w, "неправильный формат идентификатора", http.StatusBadRequest)
+		sendJSONError(w, domain.NewCustomError(http.StatusBadRequest, domain.ErrID, err))
 		return
 	}
-	code, err := h.service.Done(id)
-	if err != nil {
-		sendJSONError(w, err.Error(), code)
+	filter.ID = &id
+	cErr := h.service.Done(&filter)
+	if cErr != nil {
+		if code, ok := errorMap[cErr.Err]; ok {
+			cErr.Code = code
+		} else {
+			cErr.Code = http.StatusInternalServerError
+		}
+		sendJSONError(w, cErr)
+		return
 	}
+
 	err = json.NewEncoder(w).Encode(domain.Task{})
 	if err != nil {
 		log.Printf("Error writing response: %v", err)
@@ -155,18 +210,25 @@ func (h *TaskHandler) Done(w http.ResponseWriter, r *http.Request) {
 func (h *TaskHandler) DeleteTask(w http.ResponseWriter, r *http.Request) {
 	searchID := r.URL.Query().Get("id")
 	if searchID == "" {
-		sendJSONError(w, "не указан идентификатор", http.StatusBadRequest)
+		sendJSONError(w, domain.NewCustomError(http.StatusBadRequest, domain.ErrID, nil))
 		return
 	}
 	id, err := strconv.Atoi(searchID)
 	if err != nil {
-		sendJSONError(w, "неправильный формат идентификатора", http.StatusBadRequest)
+		sendJSONError(w, domain.NewCustomError(http.StatusBadRequest, domain.ErrID, err))
 		return
 	}
-	code, err := h.service.Delete(id)
-	if err != nil {
-		sendJSONError(w, fmt.Sprintf("ошибка удаления: %v", err), code)
+	cErr := h.service.Delete(id)
+	if cErr != nil {
+		if code, ok := errorMap[cErr.Err]; ok {
+			cErr.Code = code
+		} else {
+			cErr.Code = http.StatusInternalServerError
+		}
+		sendJSONError(w, cErr)
+		return
 	}
+
 	err = json.NewEncoder(w).Encode(domain.Task{})
 	if err != nil {
 		log.Printf("Error writing response: %v", err)
@@ -175,7 +237,6 @@ func (h *TaskHandler) DeleteTask(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *TaskHandler) NextDateHandler(w http.ResponseWriter, r *http.Request) {
-	//w.Header().Set("Content-Type", "application/json")
 	nowStr := r.URL.Query().Get("now")
 	dateStr := r.URL.Query().Get("date")
 	repeat := r.URL.Query().Get("repeat")
@@ -187,17 +248,17 @@ func (h *TaskHandler) NextDateHandler(w http.ResponseWriter, r *http.Request) {
 		var err error
 		now, err = time.Parse("20060102", nowStr)
 		if err != nil {
-			http.Error(w, "неправильный формат даты", http.StatusBadRequest)
+			http.Error(w, domain.ErrDate.Error(), http.StatusBadRequest)
 			return
 		}
 	}
 	if dateStr == "" {
-		http.Error(w, "отсутствует обязательный параметр date", http.StatusBadRequest)
+		http.Error(w, domain.ErrDate.Error(), http.StatusBadRequest)
 		return
 	}
 	_, err := time.Parse("20060102", dateStr)
 	if err != nil {
-		http.Error(w, "неправильный формат даты в параметре date", http.StatusBadRequest)
+		http.Error(w, domain.ErrDate.Error(), http.StatusBadRequest)
 		return
 	}
 	nextDate, err := h.service.NextDate(now, dateStr, repeat)

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/agidelle/todo_web/internal/domain"
 	"log"
 	"net/http"
 	"time"
@@ -18,20 +19,20 @@ func (h *TaskHandler) Login(passStored, jwtkey string) http.HandlerFunc {
 			Password string `json:"password"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&password); err != nil {
-			sendJSONError(w, "ошибка десериализации JSON", http.StatusBadRequest)
+			sendJSONError(w, domain.NewCustomError(http.StatusBadRequest, errors.New("ошибка десериализации JSON"), nil))
 			return
 		}
 		hash, err := hashPassword(password.Password)
 		if err != nil {
-			sendJSONError(w, "ошибка создания хэша пароля", http.StatusInternalServerError)
+			sendJSONError(w, domain.NewCustomError(http.StatusInternalServerError, errors.New("ошибка создания хэша пароля"), nil))
 			return
 		}
 		if password.Password != passStored {
-			sendJSONError(w, "не правильный пароль", http.StatusUnauthorized)
+			sendJSONError(w, domain.NewCustomError(http.StatusUnauthorized, errors.New("не правильный пароль"), nil))
 			return
 		}
 		if err != nil {
-			sendJSONError(w, "неправильный пароль", http.StatusUnauthorized)
+			sendJSONError(w, domain.NewCustomError(http.StatusUnauthorized, errors.New("неправильный пароль"), nil))
 			return
 		}
 		token, err := GenerateJWT(jwtkey)

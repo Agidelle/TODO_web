@@ -8,12 +8,17 @@ type Task struct {
 	Repeat  string `json:"repeat,omitempty"`
 }
 
+type Filter struct {
+	ID         *int
+	SearchTerm string
+	Date       string
+	Limit      int
+}
+
 type TaskRepository interface {
-	GetTask(id int) (*Task, error)
-	GetTasks(limit int) (*[]Task, error)
-	SearchTask(word string, limit int) (*[]Task, error)
-	SearchForDate(date string, limit int) (*[]Task, error)
+	FindTask(filter *Filter) ([]*Task, error)
 	CreateTask(task *Task) (int64, error)
 	UpdateTask(task *Task) error
-	DeleteTask(id int) error
+	DeleteTask(id *int) error
+	Close() error
 }

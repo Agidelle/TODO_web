@@ -9,7 +9,7 @@ import (
 )
 
 func main() {
-	app := cmd.Initialize()
+	app, db := cmd.Initialize()
 	server := app.Start()
 
 	stop := make(chan os.Signal, 1)
@@ -17,5 +17,5 @@ func main() {
 
 	<-stop
 
-	app.Stop(server)
+	app.Stop(server, db)
 }

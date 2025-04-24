@@ -2,7 +2,6 @@ package service
 
 import (
 	"errors"
-	"net/http"
 	"strconv"
 	"strings"
 	"time"
@@ -21,52 +20,107 @@ func NewService(repo domain.TaskRepository) *TaskService {
 	return &TaskService{repo: repo}
 }
 
-func (s *TaskService) GetTasks() (res *[]domain.Task, code int, err error) {
-	res, err = s.repo.GetTasks(limitSearch)
+func (s *TaskService) CloseDB() error {
+	err := s.repo.Close()
 	if err != nil {
-		return &[]domain.Task{}, http.StatusInternalServerError, err
+		return err
 	}
-	return res, http.StatusOK, nil
+	return nil
 }
 
-func (s *TaskService) GetTask(id int) (res *domain.Task, code int, err error) {
-	res, err = s.repo.GetTask(id)
-	if err != nil {
-		return &domain.Task{}, http.StatusInternalServerError, err
-	}
-	return res, http.StatusOK, nil
-}
-
-func (s *TaskService) Search(searchTerm string) (*[]domain.Task, int, error) {
-	if date, err := time.Parse("02.01.2006", searchTerm); err == nil {
-		tasks, err := s.repo.SearchForDate(date.Format(dateForm), limitSearch)
+// Пример общей функции поиска задач, работает корректно
+// требует мелкой корректировки GetTask, т.к. возвращает слайс
+func (s *TaskService) FindAll(filter *domain.Filter) ([]*domain.Task, *domain.CustomError) {
+	switch {
+	case filter.ID != nil:
+		res, err := s.repo.FindTask(filter)
 		if err != nil {
-			return &[]domain.Task{}, http.StatusInternalServerError, err
+			return nil, domain.NewCustomError(0, domain.ErrInternalServer, err)
 		}
-		return tasks, http.StatusOK, nil
-	}
+		if len(res) == 0 {
+			return nil, domain.NewCustomError(0, domain.ErrID, nil)
+		}
+		return res, nil
+	case filter.SearchTerm != "":
+		filter.Limit = limitSearch
+		if date, err := time.Parse("02.01.2006", filter.SearchTerm); err == nil {
+			filter.Date = date.Format(dateForm)
+			filter.SearchTerm = ""
+			tasks, err := s.repo.FindTask(filter)
+			if err != nil {
+				return nil, domain.NewCustomError(0, domain.ErrInternalServer, err)
+			}
+			return tasks, nil
+		}
 
-	tasks, err := s.repo.SearchTask(searchTerm, limitSearch)
-	if err != nil {
-		return &[]domain.Task{}, http.StatusInternalServerError, err
+		tasks, err := s.repo.FindTask(filter)
+		if err != nil {
+			return nil, domain.NewCustomError(0, domain.ErrInternalServer, err)
+		}
+		return tasks, nil
+	default:
+		filter.Limit = limitSearch
+		res, err := s.repo.FindTask(filter)
+		if err != nil {
+			return []*domain.Task{}, domain.NewCustomError(0, domain.ErrInternalServer, err)
+		}
+		return res, nil
 	}
-	return tasks, http.StatusOK, nil
 }
 
-func (s *TaskService) Create(task *domain.Task) (id int64, code int, err error) {
+func (s *TaskService) GetTasks(filter *domain.Filter) ([]*domain.Task, *domain.CustomError) {
+	filter.Limit = limitSearch
+	res, err := s.repo.FindTask(filter)
+	if err != nil {
+		return []*domain.Task{}, domain.NewCustomError(0, domain.ErrInternalServer, err)
+	}
+	return res, nil
+}
+
+func (s *TaskService) GetTask(filter *domain.Filter) (*domain.Task, *domain.CustomError) {
+	res, err := s.repo.FindTask(filter)
+	if err != nil {
+		return nil, domain.NewCustomError(0, domain.ErrInternalServer, err)
+	}
+	if len(res) == 0 {
+		return nil, domain.NewCustomError(0, domain.ErrID, nil)
+	}
+	return res[0], nil
+}
+
+func (s *TaskService) Search(filter *domain.Filter) ([]*domain.Task, *domain.CustomError) {
+	filter.Limit = limitSearch
+	if date, err := time.Parse("02.01.2006", filter.SearchTerm); err == nil {
+		filter.Date = date.Format(dateForm)
+		filter.SearchTerm = ""
+		tasks, err := s.repo.FindTask(filter)
+		if err != nil {
+			return nil, domain.NewCustomError(0, domain.ErrInternalServer, err)
+		}
+		return tasks, nil
+	}
+
+	tasks, err := s.repo.FindTask(filter)
+	if err != nil {
+		return nil, domain.NewCustomError(0, domain.ErrInternalServer, err)
+	}
+	return tasks, nil
+}
+
+func (s *TaskService) Create(task *domain.Task) (int64, *domain.CustomError) {
 	now := time.Now()
 	nowF := now.Format(dateForm)
 
 	//Проверки и исправления запроса
 	if task.Title == "" {
-		return 0, http.StatusBadRequest, errors.New("не указан заголовок задачи")
+		return 0, domain.NewCustomError(0, domain.ErrBadTitle, nil)
 	}
 	if task.Date == "" {
 		task.Date = time.Now().Format(dateForm) //если дата пустая, присваиваем текущую
 	}
 	date, err := time.Parse(dateForm, task.Date)
 	if err != nil {
-		return 0, http.StatusBadRequest, errors.New("неправильный формат даты")
+		return 0, domain.NewCustomError(0, domain.ErrDate, err)
 	}
 	if task.Repeat == "" && nowF > date.Format(dateForm) {
 		task.Date = nowF
@@ -74,28 +128,31 @@ func (s *TaskService) Create(task *domain.Task) (id int64, code int, err error) 
 	if nowF > task.Date {
 		task.Date, err = s.NextDate(now, task.Date, task.Repeat)
 		if err != nil {
-			return 0, http.StatusInternalServerError, err
+			return 0, domain.NewCustomError(0, domain.ErrInternalServer, err)
 		}
 	}
 
 	//Создаем задачу в БД
-	id, err = s.repo.CreateTask(task)
-	return id, http.StatusCreated, nil
+	id, err := s.repo.CreateTask(task)
+	if err != nil {
+		return 0, domain.NewCustomError(0, domain.ErrInternalServer, err)
+	}
+	return id, nil
 }
 
-func (s *TaskService) Update(task *domain.Task) (code int, err error) {
+func (s *TaskService) Update(task *domain.Task) *domain.CustomError {
 	now := time.Now()
 	nowF := now.Format(dateForm)
 	//Проверки и исправления запроса
 	if task.Title == "" {
-		return http.StatusBadRequest, errors.New("не указан заголовок задачи")
+		return domain.NewCustomError(0, domain.ErrBadTitle, nil)
 	}
 	if task.Date == "" {
 		task.Date = time.Now().Format(dateForm)
 	}
 	date, err := time.Parse(dateForm, task.Date)
 	if err != nil {
-		return http.StatusBadRequest, errors.New("неправильный формат даты")
+		return domain.NewCustomError(0, domain.ErrDate, err)
 	}
 	if task.Repeat == "" && nowF > date.Format(dateForm) {
 		task.Date = nowF
@@ -103,48 +160,51 @@ func (s *TaskService) Update(task *domain.Task) (code int, err error) {
 	if nowF > task.Date {
 		task.Date, err = s.NextDate(now, task.Date, task.Repeat)
 		if err != nil {
-			return http.StatusInternalServerError, err
+			return domain.NewCustomError(0, domain.ErrInternalServer, err)
 		}
 	}
 	err = s.repo.UpdateTask(task)
 	if err != nil {
-		return http.StatusInternalServerError, err
+		return domain.NewCustomError(0, domain.ErrInternalServer, err)
 	}
-	return http.StatusOK, nil
+	return nil
 }
 
-func (s *TaskService) Done(id int) (code int, err error) {
+func (s *TaskService) Done(filter *domain.Filter) *domain.CustomError {
 	now := time.Now()
-	task, err := s.repo.GetTask(id)
+	task, err := s.repo.FindTask(filter)
 	if err != nil {
-		return http.StatusBadRequest, errors.New("задача не найдена")
+		return domain.NewCustomError(0, domain.ErrID, err)
 	}
-	rDay, err := s.NextDate(now, task.Date, task.Repeat)
+	if len(task) == 0 {
+		return domain.NewCustomError(0, domain.ErrID, nil)
+	}
+	rDay, err := s.NextDate(now, task[0].Date, task[0].Repeat)
 	if err != nil {
-		return http.StatusInternalServerError, err
+		return domain.NewCustomError(0, domain.ErrInternalServer, err)
 	}
 	if rDay == "delete" {
-		err = s.repo.DeleteTask(id)
+		err = s.repo.DeleteTask(filter.ID)
 		if err != nil {
-			return http.StatusInternalServerError, err
+			domain.NewCustomError(0, domain.ErrInternalServer, err)
 		}
-		return http.StatusOK, nil
+		return nil
 	}
-	task.ID = strconv.Itoa(id)
-	task.Date = rDay
-	err = s.repo.UpdateTask(task)
+	task[0].ID = strconv.Itoa(*filter.ID)
+	task[0].Date = rDay
+	err = s.repo.UpdateTask(task[0])
 	if err != nil {
-		return http.StatusInternalServerError, err
+		return domain.NewCustomError(0, domain.ErrInternalServer, err)
 	}
-	return http.StatusOK, nil
+	return nil
 }
 
-func (s *TaskService) Delete(id int) (code int, err error) {
-	err = s.repo.DeleteTask(id)
+func (s *TaskService) Delete(id int) *domain.CustomError {
+	err := s.repo.DeleteTask(&id)
 	if err != nil {
-		return http.StatusInternalServerError, err
+		return domain.NewCustomError(0, domain.ErrInternalServer, err)
 	}
-	return http.StatusOK, nil
+	return nil
 }
 
 func (s *TaskService) NextDate(now time.Time, dstart string, repeat string) (string, error) {

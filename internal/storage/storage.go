@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 
 	"github.com/agidelle/todo_web/internal/config"
 	"github.com/agidelle/todo_web/internal/domain"
@@ -76,11 +77,46 @@ func RunMigrations(cfg *config.Config) error {
 	return nil
 }
 
-func (s *Storage) GetTasks(limit int) (*[]domain.Task, error) {
-	tasks := make([]domain.Task, 0)
-	rows, err := s.db.Query("SELECT id, date, title, comment, repeat FROM scheduler ORDER BY date LIMIT ?", limit)
+func (s *Storage) Close() error {
+	err := s.db.Close()
 	if err != nil {
-		return &[]domain.Task{}, err
+		return err
+	}
+	return nil
+}
+func (s *Storage) FindTask(filter *domain.Filter) ([]*domain.Task, error) {
+	tasks := make([]*domain.Task, 0)
+	query := "SELECT id, date, title, comment, repeat FROM scheduler"
+	args := []interface{}{}
+	conditions := []string{}
+
+	//Добавление условий в зависимости от фильтра
+	if filter.ID != nil {
+		conditions = append(conditions, "id = ?")
+		args = append(args, *filter.ID)
+	}
+	if filter.SearchTerm != "" {
+		searchPattern := "%" + filter.SearchTerm + "%"
+		conditions = append(conditions, "(title LIKE ? OR comment LIKE ?)")
+		args = append(args, searchPattern, searchPattern)
+	}
+	if filter.Date != "" {
+		conditions = append(conditions, "date = ?")
+		args = append(args, filter.Date)
+	}
+
+	if len(conditions) > 0 {
+		query += " WHERE " + strings.Join(conditions, " AND ")
+	}
+	query += " ORDER BY date"
+	if filter.Limit > 0 {
+		query += " LIMIT ?"
+		args = append(args, filter.Limit)
+	}
+
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, err
 	}
 	defer func() {
 		if err := rows.Close(); err != nil {
@@ -91,76 +127,102 @@ func (s *Storage) GetTasks(limit int) (*[]domain.Task, error) {
 		var t domain.Task
 		err = rows.Scan(&t.ID, &t.Date, &t.Title, &t.Comment, &t.Repeat)
 		if err != nil {
-			return &[]domain.Task{}, err
+			return nil, err
 		}
-		tasks = append(tasks, t)
+		tasks = append(tasks, &t)
 	}
 	if err = rows.Err(); err != nil {
-		return &[]domain.Task{}, err
+		return nil, err
 	}
-	return &tasks, nil
+
+	return tasks, nil
 }
 
-func (s *Storage) GetTask(id int) (*domain.Task, error) {
-	task := domain.Task{}
-	row := s.db.QueryRow("SELECT date, title, comment, repeat FROM scheduler WHERE id = ?", id)
-	err := row.Scan(&task.Date, &task.Title, &task.Comment, &task.Repeat)
-	if err != nil {
-		return &domain.Task{}, err
-	}
-	return &task, nil
-}
-
-func (s *Storage) SearchTask(searchTerm string, limit int) (*[]domain.Task, error) {
-	tasks := make([]domain.Task, 0)
-	sPattern := "%" + searchTerm + "%"
-	rows, err := s.db.Query("SELECT id, date, title, comment, repeat FROM scheduler WHERE title LIKE ? OR comment LIKE ? ORDER BY date LIMIT ?", sPattern, sPattern, limit)
-	if err != nil {
-		return &[]domain.Task{}, err
-	}
-	defer func() {
-		if err := rows.Close(); err != nil {
-			log.Printf("Error closing rows: %v", err)
-		}
-	}()
-	for rows.Next() {
-		var t domain.Task
-		err = rows.Scan(&t.ID, &t.Date, &t.Title, &t.Comment, &t.Repeat)
-		if err != nil {
-			return &[]domain.Task{}, err
-		}
-		tasks = append(tasks, t)
-	}
-	if err = rows.Err(); err != nil {
-		return &[]domain.Task{}, err
-	}
-	return &tasks, nil
-}
-
-func (s *Storage) SearchForDate(date string, limit int) (*[]domain.Task, error) {
-	tasks := make([]domain.Task, 0)
-	rows, err := s.db.Query("SELECT id, date, title, comment, repeat FROM scheduler WHERE date=? LIMIT ?", date, limit)
-	if err != nil {
-		return &[]domain.Task{}, err
-	}
-	defer func() {
-		if err := rows.Close(); err != nil {
-			log.Printf("Error closing rows: %v", err)
-		}
-	}()
-	for rows.Next() {
-		var t domain.Task
-		err = rows.Scan(&t.ID, &t.Date, &t.Title, &t.Comment, &t.Repeat)
-		if err != nil {
-			return &[]domain.Task{}, err
-		}
-		tasks = append(tasks, t)
-	}
-	if err = rows.Err(); err != nil {
-		return &[]domain.Task{}, err
-	}
-	return &tasks, nil
-}
+//func (s *Storage) GetTasks(limit int) ([]*domain.Task, error) {
+//	tasks := make([]*domain.Task, 0)
+//	rows, err := s.db.Query("SELECT id, date, title, comment, repeat FROM scheduler ORDER BY date LIMIT ?", limit)
+//	if err != nil {
+//		return nil, err
+//	}
+//	defer func() {
+//		if err := rows.Close(); err != nil {
+//			log.Printf("Error closing rows: %v", err)
+//		}
+//	}()
+//	for rows.Next() {
+//		var t domain.Task
+//		err = rows.Scan(&t.ID, &t.Date, &t.Title, &t.Comment, &t.Repeat)
+//		if err != nil {
+//			return nil, err
+//		}
+//		tasks = append(tasks, &t)
+//	}
+//	if err = rows.Err(); err != nil {
+//		return nil, err
+//	}
+//	return tasks, nil
+//}
+//
+//func (s *Storage) GetTask(id int) (*domain.Task, error) {
+//	task := domain.Task{}
+//	row := s.db.QueryRow("SELECT date, title, comment, repeat FROM scheduler WHERE id = ?", id)
+//	err := row.Scan(&task.Date, &task.Title, &task.Comment, &task.Repeat)
+//	if err != nil {
+//		return nil, err
+//	}
+//	return &task, nil
+//}
+//
+//func (s *Storage) SearchTask(searchTerm string, limit int) ([]*domain.Task, error) {
+//	tasks := make([]*domain.Task, 0)
+//	sPattern := "%" + searchTerm + "%"
+//	rows, err := s.db.Query("SELECT id, date, title, comment, repeat FROM scheduler WHERE title LIKE ? OR comment LIKE ? ORDER BY date LIMIT ?", sPattern, sPattern, limit)
+//	if err != nil {
+//		return nil, err
+//	}
+//	defer func() {
+//		if err := rows.Close(); err != nil {
+//			log.Printf("Error closing rows: %v", err)
+//		}
+//	}()
+//	for rows.Next() {
+//		var t domain.Task
+//		err = rows.Scan(&t.ID, &t.Date, &t.Title, &t.Comment, &t.Repeat)
+//		if err != nil {
+//			return nil, err
+//		}
+//		tasks = append(tasks, &t)
+//	}
+//	if err = rows.Err(); err != nil {
+//		return nil, err
+//	}
+//	return tasks, nil
+//}
+//
+//func (s *Storage) SearchForDate(date string, limit int) ([]*domain.Task, error) {
+//	tasks := make([]*domain.Task, 0)
+//	rows, err := s.db.Query("SELECT id, date, title, comment, repeat FROM scheduler WHERE date=? LIMIT ?", date, limit)
+//	if err != nil {
+//		return nil, err
+//	}
+//	defer func() {
+//		if err := rows.Close(); err != nil {
+//			log.Printf("Error closing rows: %v", err)
+//		}
+//	}()
+//	for rows.Next() {
+//		var t domain.Task
+//		err = rows.Scan(&t.ID, &t.Date, &t.Title, &t.Comment, &t.Repeat)
+//		if err != nil {
+//			return nil, err
+//		}
+//		tasks = append(tasks, &t)
+//	}
+//	if err = rows.Err(); err != nil {
+//		return nil, err
+//	}
+//	return tasks, nil
+//}
 
 func (s *Storage) CreateTask(task *domain.Task) (int64, error) {
 	res, err := s.db.Exec("INSERT INTO scheduler (date, title, comment, repeat) VALUES (?, ?, ?, ?)", task.Date, task.Title, task.Comment, task.Repeat)
@@ -185,12 +247,12 @@ func (s *Storage) UpdateTask(task *domain.Task) error {
 		return err
 	}
 	if count == 0 {
-		return fmt.Errorf(`некорректный id для редактирования`)
+		return fmt.Errorf("id задачи не найден в БД")
 	}
 	return nil
 }
 
-func (s *Storage) DeleteTask(id int) error {
+func (s *Storage) DeleteTask(id *int) error {
 	query, err := s.db.Exec("DELETE FROM scheduler WHERE id = ?", id)
 	if err != nil {
 		return err
@@ -200,7 +262,7 @@ func (s *Storage) DeleteTask(id int) error {
 		return err
 	}
 	if count == 0 {
-		return fmt.Errorf(`некорректный id для удаления`)
+		return fmt.Errorf("id задачи не найден в БД")
 	}
 	return nil
 }

@@ -21,7 +21,7 @@ type App struct {
 	handler *api.TaskHandler
 }
 
-func Initialize() *App {
+func Initialize() (*App, *storage.Storage) {
 	//Загружаем конфиг из .env или переменных окружения
 	cfg, err := config.LoadCfg()
 	if err != nil {
@@ -35,12 +35,11 @@ func Initialize() *App {
 	return &App{
 		cfg:     cfg,
 		handler: handler,
-	}
+	}, db
 }
 
 func (a *App) Start() *http.Server {
 	fmt.Println("Starting server...")
-	fmt.Printf("Listening on port %d.\n", a.cfg.Port)
 	authEnabled := a.cfg.Password != ""
 
 	r := chi.NewRouter()
@@ -65,10 +64,13 @@ func (a *App) Start() *http.Server {
 	})
 
 	server := &http.Server{
-		Addr:    fmt.Sprintf(":%d", a.cfg.Port),
-		Handler: r,
+		Addr:         fmt.Sprintf(":%d", a.cfg.Port),
+		Handler:      r,
+		ReadTimeout:  5 * time.Second,
+		WriteTimeout: 5 * time.Second,
 	}
 	go func() {
+		fmt.Printf("Listening on port %d.\n", a.cfg.Port)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Printf("Error starting server: %s\n", err)
 		}
@@ -76,7 +78,7 @@ func (a *App) Start() *http.Server {
 	return server
 }
 
-func (a *App) Stop(server *http.Server) {
+func (a *App) Stop(server *http.Server, db *storage.Storage) {
 	fmt.Println("\nShutting down server ...")
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -85,5 +87,10 @@ func (a *App) Stop(server *http.Server) {
 		log.Printf("Error during server shutdown: %v\n", err)
 	} else {
 		fmt.Println("Server stopped gracefully.")
+	}
+	if err := db.Close(); err != nil {
+		log.Printf("Error closing database connection: %v\n", err)
+	} else {
+		fmt.Println("Database closed.")
 	}
 }
